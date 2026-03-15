@@ -809,7 +809,13 @@ async function main() {
     const cdp = new CDP();
     await cdp.connect(getWsUrl());
     const { targetId } = await cdp.send('Target.createTarget', { url });
+    // Refresh cache; new tab may not appear in getTargets immediately, so add it manually
+    const pages = await getPages(cdp);
+    if (!pages.some(p => p.targetId === targetId)) {
+      pages.push({ targetId, title: url, url });
+    }
     cdp.close();
+    writeFileSync(PAGES_CACHE, JSON.stringify(pages), { mode: 0o600 });
     console.log(`Opened new tab: ${targetId.slice(0, 8)}  ${url}`);
     console.log('Note: this tab will need "Allow debugging?" approval on first access.');
     return;
