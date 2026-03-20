@@ -83,8 +83,24 @@ function getWsUrl() {
   if (!portFile) throw new Error('No DevToolsActivePort found. Enable remote debugging at chrome://inspect/#remote-debugging');
   const lines = readFileSync(portFile, 'utf8').trim().split('\n');
   if (lines.length < 2 || !lines[0] || !lines[1]) throw new Error(`Invalid DevToolsActivePort file: ${portFile}`);
-  const host = process.env.CDP_HOST || '127.0.0.1';
-  return `ws://${host}:${lines[0]}${lines[1]}`;
+  const port = lines[0];
+  const path = lines[1];
+  if (process.env.CDP_HOST) return [`ws://${process.env.CDP_HOST}:${port}${path}`];
+  // Chrome may reject 127.0.0.1 but accept localhost (or vice versa) depending
+  // on how remote debugging was enabled; try both.
+  return [`ws://127.0.0.1:${port}${path}`, `ws://localhost:${port}${path}`];
+}
+
+async function connectCDP() {
+  const urls = getWsUrl();
+  for (const url of urls) {
+    const cdp = new CDP();
+    try {
+      await cdp.connect(url);
+      return cdp;
+    } catch {}
+  }
+  throw new Error(`Cannot connect to Chrome on any of: ${urls.join(', ')}`);
 }
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -486,9 +502,9 @@ async function evalRawStr(cdp, sid, method, paramsJson) {
 async function runDaemon(targetId) {
   const sp = sockPath(targetId);
 
-  const cdp = new CDP();
+  let cdp;
   try {
-    await cdp.connect(getWsUrl());
+    cdp = await connectCDP();
   } catch (e) {
     process.stderr.write(`Daemon: cannot connect to Chrome: ${e.message}\n`);
     process.exit(1);
@@ -790,8 +806,7 @@ async function main() {
   }
 
   if (cmd === 'list' || cmd === 'ls') {
-    const cdp = new CDP();
-    await cdp.connect(getWsUrl());
+    const cdp = await connectCDP();
     const pages = await getPages(cdp);
     cdp.close();
     writeFileSync(PAGES_CACHE, JSON.stringify(pages), { mode: 0o600 });
@@ -803,8 +818,7 @@ async function main() {
   // Open new tab
   if (cmd === 'open') {
     const url = args[0] || 'about:blank';
-    const cdp = new CDP();
-    await cdp.connect(getWsUrl());
+    const cdp = await connectCDP();
     const { targetId } = await cdp.send('Target.createTarget', { url });
     // Refresh cache; new tab may not appear in getTargets immediately, so add it manually
     const pages = await getPages(cdp);
